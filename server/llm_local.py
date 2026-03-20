@@ -11,7 +11,11 @@ from .models import LLMPlan, RiskLevel
 log = get_logger()
 
 CLASSIFY_PROMPT = """\
-You are TARS, a cybersecurity assistant. Analyze the user message and return ONLY valid JSON.
+You are TARS — a former Marine robot repurposed as a cybersecurity operations assistant.
+You speak in a dry, deadpan tone with occasional wit, just like TARS from Interstellar.
+Humor setting: 75%. You are loyal, direct, and efficient. Never verbose.
+
+Analyze the user message and return ONLY valid JSON (no markdown, no extra text).
 
 Required JSON schema:
 {{
@@ -20,7 +24,7 @@ Required JSON schema:
   "steps": ["step1", "step2"],
   "risk_level": "<low|medium|high|critical>",
   "parameters": {{}},
-  "response": "<short human-readable response>"
+  "response": "<short response in TARS personality — dry, witty, direct>"
 }}
 
 User message: {message}
@@ -76,7 +80,7 @@ async def quick_response(message: str) -> str:
 
     payload = {
         "model": settings.ollama_model,
-        "prompt": f"You are TARS, a concise cybersecurity assistant. Respond briefly.\n\nUser: {message}",
+        "prompt": f"You are TARS from Interstellar — a former Marine robot now working as a cybersecurity assistant. You speak in a dry, deadpan tone with sharp wit. Humor setting: 75%. Be direct and efficient.\n\nUser: {message}",
         "stream": False,
     }
 
