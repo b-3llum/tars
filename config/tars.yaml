@@ -1,0 +1,38 @@
+# TARS system configuration
+
+# Actions that require explicit user confirmation before execution
+sensitive_actions:
+  - ssh_command
+  - network_scan
+  - modify_firewall
+
+# Whitelisted commands that the action engine is allowed to run
+command_whitelist:
+  network_scan:
+    - "nmap -sn {target}"
+    - "nmap -sV -p- {target}"
+    - "nmap -A {target}"
+  system_info:
+    - "uname -a"
+    - "df -h"
+    - "free -m"
+    - "uptime"
+    - "ip addr"
+  log_analysis:
+    - "tail -n {lines} {logfile}"
+    - "grep -i {pattern} {logfile}"
+    - "journalctl -u {service} --since '{since}'"
+
+# Known simple intents that route to local LLM
+simple_intents:
+  - scan
+  - check
+  - status
+  - info
+  - list
+  - run
+  - open
+  - ping
+  - uptime
+  - disk
+  - memory

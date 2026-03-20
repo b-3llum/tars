@@ -1,0 +1,13 @@
+# SSH host definitions — key-based auth only
+hosts:
+  kali-lab:
+    ip: "192.168.1.50"
+    user: "kali"
+    key_path: "~/.ssh/id_rsa"
+    description: "Kali Linux lab machine"
+
+  ubuntu-server:
+    ip: "192.168.1.100"
+    user: "admin"
+    key_path: "~/.ssh/id_rsa"
+    description: "Ubuntu home server"
