@@ -49,7 +49,7 @@ enum MessageSender {
     case tars
 }
 
-struct ChatMessage {
+struct ChatMessage: Identifiable {
     let id = UUID()
     let text: String
     let sender: MessageSender
