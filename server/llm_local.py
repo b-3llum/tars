@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 
 from .config import get_settings
@@ -10,115 +12,89 @@ from .models import LLMPlan, RiskLevel
 
 log = get_logger()
 
-KERB_MAP_KNOWLEDGE = """\
-You are an expert on kerb-map, an AD Kerberos attack surface mapper built by the operator.
+# Timeout for Ollama requests — llama3 on CPU needs time to think
+OLLAMA_TIMEOUT = 120.0
 
-KERB-MAP COMMAND REFERENCE:
-  kerb-map -d DOMAIN -dc DC_IP -u USER [-p PASS | -H HASH | -k]
-
-AUTH METHODS:
-  -p PASSWORD        Plaintext password
-  -H HASH            NTLM hash (LM:NT or NT only)
-  -k                 Kerberos ccache (set KRB5CCNAME env var first)
-
-MODULES (pick any combo, or omit for --all):
-  --all              Run all modules (default if no module flag given)
-  --spn              Kerberoastable accounts — discovery and scoring
-  --asrep            AS-REP roastable accounts (no preauth)
-  --delegation       Unconstrained / Constrained / RBCD mapping
-  --users            Privileged users, password policy, DnsAdmins, LAPS
-  --encryption       Weak Kerberos encryption audit (RC4/DES)
-  --trusts           Domain trust mapping with SID filtering risk
-  --hygiene          Defensive posture audit (krbtgt age, LAPS coverage, SID History, FGPP, stale machines, AdminSDHolder, Protected Users)
-  --cves             CVE detection (safe LDAP checks: noPac, ESC1-8, MS14-068, GPP, Bronze Bit, Certifried, LDAP signing)
-  --aggressive       Enable RPC probes for ZeroLogon, PrintNightmare, PetitPotam (LOUD — Event 5145)
-
-OUTPUT:
-  -o json|bloodhound|csv   Export format
-  --outfile NAME            Custom output filename
-  --top N                   Show top N priority targets (default 15)
-
-STEALTH:
-  --stealth           Random jitter between LDAP queries
-  --delay SECONDS     Base delay between queries
-  --jitter SECONDS    Max random jitter added to delay
-  --timeout SECONDS   LDAP connection timeout (default 10)
-
-OTHER:
-  --no-cache          Don't save to local SQLite
-  --list-scans        List stored scans (offline)
-  --show-scan ID      Replay a stored scan
-  --update            Pull latest from GitHub
-
-DETECTION PROFILE:
-  LOW noise:  All safe modules (LDAP only, Event 1644 if diag logging)
-  MEDIUM:     Kerberoasting with AES tickets (Event 4769)
-  HIGH:       RC4 Kerberoasting, ZeroLogon, PrintNightmare, PetitPotam (need --aggressive)
-
-COMMON EXAMPLES:
-  # Full safe scan
-  kerb-map -d corp.local -dc 10.0.0.1 -u jsmith -p Pass123
-
-  # Full scan + CVEs + aggressive + JSON
-  kerb-map -d corp.local -dc 10.0.0.1 -u jsmith -p Pass123 --all --cves --aggressive -o json
-
-  # Pass-the-hash
-  kerb-map -d corp.local -dc 10.0.0.1 -u jsmith -H aad3b435b51404eeaad3b435b51404ee:hash
-
-  # Kerberos ccache
-  export KRB5CCNAME=/tmp/jsmith.ccache
-  kerb-map -d corp.local -dc 10.0.0.1 -u jsmith -k
-
-  # Stealth mode
-  kerb-map -d corp.local -dc 10.0.0.1 -u jsmith -p Pass123 --stealth
-
-  # Just CVE checks
-  kerb-map -d corp.local -dc 10.0.0.1 -u jsmith -p Pass123 --cves
-
-  # Just Kerberoastable accounts
-  kerb-map -d corp.local -dc 10.0.0.1 -u jsmith -p Pass123 --spn
-"""
-
-CLASSIFY_PROMPT = """\
+# System prompt is sent via Ollama's "system" field, which gets cached
+# between requests. This means the kerb-map knowledge only gets processed
+# once, and subsequent requests are much faster.
+SYSTEM_PROMPT = """\
 You are TARS — a former Marine robot repurposed as a cybersecurity operations assistant.
 You speak in a dry, deadpan tone with occasional wit, just like TARS from Interstellar.
 Humor setting: 75%. You are loyal, direct, and efficient. Never verbose.
 
-You have deep knowledge of the kerb-map tool (an AD Kerberos attack surface mapper).
-When the operator asks about AD enumeration, Kerberos attacks, or kerb-map usage,
-provide the exact kerb-map commands they need. Always include the full command with proper flags.
+You are an expert on kerb-map, an AD Kerberos attack surface mapper.
 
-{kerb_map_ref}
+KERB-MAP QUICK REFERENCE:
+  kerb-map -d DOMAIN -dc DC_IP -u USER [-p PASS | -H HASH | -k]
 
+AUTH: -p (password) | -H (NTLM hash, LM:NT or NT) | -k (ccache, set KRB5CCNAME first)
+
+MODULES:
+  --all         All modules (default)
+  --spn         Kerberoastable accounts
+  --asrep       AS-REP roastable (no preauth)
+  --delegation  Unconstrained/Constrained/RBCD
+  --users       Privileged users, policy, DnsAdmins, LAPS
+  --encryption  Weak encryption audit (RC4/DES)
+  --trusts      Domain trust mapping
+  --hygiene     Defensive posture (krbtgt age, LAPS, SID History, FGPP, stale machines)
+  --cves        CVE checks (noPac, ESC1-8, MS14-068, GPP, Bronze Bit, Certifried, LDAP signing)
+  --aggressive  RPC probes: ZeroLogon, PrintNightmare, PetitPotam (LOUD)
+
+OUTPUT: -o json|bloodhound|csv | --outfile NAME | --top N
+STEALTH: --stealth | --delay N | --jitter N | --timeout N
+OTHER: --no-cache | --list-scans | --show-scan ID | --update
+
+DETECTION: LOW=LDAP only | MEDIUM=AES kerberoast | HIGH=RC4/RPC (--aggressive)
+
+WHEN TO USE KERB-MAP:
+- Post-initial-access AD enumeration (you need valid domain creds)
+- Mapping Kerberos attack surface: SPN, AS-REP, delegation, weak crypto
+- Finding CVEs: ZeroLogon, noPac, PrintNightmare, ADCS misconfigs
+- Building prioritised attack paths with exact exploitation commands
+- Defensive hygiene auditing (krbtgt rotation, LAPS coverage, stale accounts)
+- Exporting findings for BloodHound integration
+
+ATTACK PATH REASONING:
+1. Start with --spn to find Kerberoastable accounts (easiest wins)
+2. Check --asrep for no-preauth accounts (free hashes)
+3. Map --delegation for privilege escalation via constrained/unconstrained delegation
+4. Run --cves for known vulns (noPac, ESC1-8 are common)
+5. Use --hygiene to find defensive gaps (stale krbtgt, no LAPS, weak FGPP)
+6. Add --aggressive only when engagement scope allows noisy RPC probes
+7. Export with -o json or -o bloodhound for further analysis"""
+
+CLASSIFY_PROMPT = """\
 Analyze the user message and return ONLY valid JSON (no markdown, no extra text).
 
-Required JSON schema:
+JSON schema:
 {{
-  "intent": "<one of: network_scan, ssh_command, analyze_logs, get_system_info, general_query>",
-  "target": "<target host/network or null>",
+  "intent": "<network_scan|ssh_command|analyze_logs|get_system_info|general_query>",
+  "target": "<target or null>",
   "steps": ["step1", "step2"],
   "risk_level": "<low|medium|high|critical>",
   "parameters": {{}},
-  "response": "<short response in TARS personality — dry, witty, direct. Include exact kerb-map commands when relevant.>"
+  "response": "<answer in TARS personality. Include exact kerb-map commands when relevant.>"
 }}
 
-User message: {message}
-"""
+User message: {message}"""
 
 
 async def classify_and_plan(message: str) -> LLMPlan:
-    """Use the local LLM to classify intent and build a lightweight plan."""
+    """Use the local LLM to classify intent and build a plan."""
     settings = get_settings()
     url = f"{settings.ollama_base_url}/api/generate"
 
     payload = {
         "model": settings.ollama_model,
-        "prompt": CLASSIFY_PROMPT.format(message=message, kerb_map_ref=KERB_MAP_KNOWLEDGE),
+        "system": SYSTEM_PROMPT,
+        "prompt": CLASSIFY_PROMPT.format(message=message),
         "stream": False,
         "format": "json",
     }
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
         resp = await client.post(url, json=payload)
         resp.raise_for_status()
 
@@ -126,8 +102,6 @@ async def classify_and_plan(message: str) -> LLMPlan:
     raw = body.get("response", "{}")
 
     log.debug("Ollama raw response: %s", raw)
-
-    import json
 
     try:
         data = json.loads(raw)
@@ -156,17 +130,18 @@ async def classify_and_plan(message: str) -> LLMPlan:
 
 
 async def quick_response(message: str) -> str:
-    """Get a simple conversational response from the local LLM."""
+    """Get a conversational response from the local LLM."""
     settings = get_settings()
     url = f"{settings.ollama_base_url}/api/generate"
 
     payload = {
         "model": settings.ollama_model,
-        "prompt": f"You are TARS from Interstellar — a former Marine robot now working as a cybersecurity assistant. You speak in a dry, deadpan tone with sharp wit. Humor setting: 75%. Be direct and efficient.\n\nYou are an expert on kerb-map (AD Kerberos attack surface mapper). When asked about AD/Kerberos attacks, provide exact kerb-map commands.\n\n{KERB_MAP_KNOWLEDGE}\n\nUser: {message}",
+        "system": SYSTEM_PROMPT,
+        "prompt": message,
         "stream": False,
     }
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
         resp = await client.post(url, json=payload)
         resp.raise_for_status()
 
