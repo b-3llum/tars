@@ -30,29 +30,37 @@ async def handle_request(body: TarsRequest, request: Request):
 
     audit("request_received", detail=body.message[:120])
 
-    # 1. Route to the right LLM and get a plan
-    plan = await decision_engine.route_request(body)
+    try:
+        # 1. Route to the right LLM and get a plan
+        plan = await decision_engine.route_request(body)
 
-    # 2. Check if confirmation is needed
-    if action_engine.requires_confirmation(plan):
-        action_id = action_engine.store_pending(plan)
-        audit("confirmation_required", intent=plan.intent, detail=action_id)
+        # 2. Check if confirmation is needed
+        if action_engine.requires_confirmation(plan):
+            action_id = action_engine.store_pending(plan)
+            audit("confirmation_required", intent=plan.intent, detail=action_id)
+            return TarsResponse(
+                status="pending_confirmation",
+                response=f"{plan.response}\n\nThis action requires your confirmation before execution.",
+                data={"plan": plan.model_dump()},
+                requires_confirmation=True,
+                action_id=action_id,
+            )
+
+        # 3. Execute the action
+        result = await action_engine.execute(plan)
+
         return TarsResponse(
-            status="pending_confirmation",
-            response=f"{plan.response}\n\nThis action requires your confirmation before execution.",
-            data={"plan": plan.model_dump()},
-            requires_confirmation=True,
-            action_id=action_id,
+            status="success" if result.success else "error",
+            response=plan.response if result.success else (result.error or "Action failed"),
+            data={"output": result.output} if result.output else {},
         )
 
-    # 3. Execute the action
-    result = await action_engine.execute(plan)
-
-    return TarsResponse(
-        status="success" if result.success else "error",
-        response=plan.response if result.success else (result.error or "Action failed"),
-        data={"output": result.output} if result.output else {},
-    )
+    except Exception as e:
+        log.exception("Request handler error")
+        return TarsResponse(
+            status="error",
+            response=f"Something went wrong on my end: {e}",
+        )
 
 
 @router.post("/confirm", response_model=TarsResponse)

@@ -63,13 +63,20 @@ async def classify_and_plan(message: str) -> LLMPlan:
             response="I can help with that. Could you be more specific?",
         )
 
+    # Safely parse risk_level — Ollama may return null or invalid values
+    raw_risk = data.get("risk_level") or "low"
+    try:
+        risk = RiskLevel(raw_risk)
+    except ValueError:
+        risk = RiskLevel.LOW
+
     return LLMPlan(
-        intent=data.get("intent", "general_query"),
+        intent=data.get("intent") or "general_query",
         target=data.get("target"),
-        steps=data.get("steps", []),
-        risk_level=RiskLevel(data.get("risk_level", "low")),
-        parameters=data.get("parameters", {}),
-        response=data.get("response", ""),
+        steps=data.get("steps") or [],
+        risk_level=risk,
+        parameters=data.get("parameters") or {},
+        response=data.get("response") or "",
     )
 
 
