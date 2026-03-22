@@ -92,6 +92,7 @@ async def classify_and_plan(message: str) -> LLMPlan:
         "prompt": CLASSIFY_PROMPT.format(message=message),
         "stream": False,
         "format": "json",
+        "keep_alive": "30m",  # Keep model loaded in RAM for 30 min
     }
 
     async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
@@ -139,6 +140,7 @@ async def quick_response(message: str) -> str:
         "system": SYSTEM_PROMPT,
         "prompt": message,
         "stream": False,
+        "keep_alive": "30m",
     }
 
     async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:

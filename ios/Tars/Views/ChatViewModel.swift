@@ -7,6 +7,7 @@ final class ChatViewModel: ObservableObject {
 
     @Published var messages: [ChatMessage] = []
     @Published var isListening = false
+    @Published var isThinking = false
     @Published var voiceOutputEnabled = true
 
     private let network = NetworkManager.shared
@@ -23,6 +24,7 @@ final class ChatViewModel: ObservableObject {
             text: "TARS online. Humor setting: 75%. How can I help you, Cooper?",
             sender: .tars
         ))
+        speakIfEnabled("TARS online. Humor setting: 75%.")
         requestPermissions()
     }
 
@@ -31,10 +33,12 @@ final class ChatViewModel: ObservableObject {
     func send(message: String) {
         let userMsg = ChatMessage(text: message, sender: .user)
         messages.append(userMsg)
+        isThinking = true
 
         network.sendRequest(message: message) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
+                self.isThinking = false
                 switch result {
                 case .success(let resp):
                     let msg = ChatMessage(
@@ -61,9 +65,11 @@ final class ChatViewModel: ObservableObject {
     // MARK: - Confirm / Deny
 
     func confirm(actionId: String) {
+        isThinking = true
         network.confirm(actionId: actionId, confirmed: true) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
+                self.isThinking = false
                 switch result {
                 case .success(let resp):
                     self.messages.append(ChatMessage(text: resp.response, sender: .tars))
@@ -86,14 +92,37 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Text-to-Speech
 
+    /// TARS voice — uses the premium "Aaron" voice (deep US male) if available,
+    /// falls back to enhanced Daniel (British), then compact Daniel.
+    /// To use a downloaded voice, go to:
+    ///   Settings > Accessibility > Spoken Content > Voices > English
+    ///   and download "Aaron (Enhanced)" or "Daniel (Enhanced)" for best quality.
     func speakIfEnabled(_ text: String) {
         guard voiceOutputEnabled else { return }
+
+        // Switch audio session to playback so it goes through the speaker
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+        try? AVAudioSession.sharedInstance().setActive(true)
+
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(identifier: "com.apple.voice.compact.en-GB.Daniel")
-            ?? AVSpeechSynthesisVoice(language: "en-GB")
-        utterance.rate = 0.48
-        utterance.pitchMultiplier = 0.85
+
+        // Try voices in order of preference — deep, authoritative, robotic feel
+        let preferredVoices = [
+            "com.apple.voice.enhanced.en-US.Aaron",      // Deep US male (best)
+            "com.apple.voice.compact.en-US.Aaron",        // Deep US male (compact)
+            "com.apple.voice.enhanced.en-GB.Daniel",      // British male (enhanced)
+            "com.apple.voice.compact.en-GB.Daniel",       // British male (compact)
+        ]
+
+        utterance.voice = preferredVoices
+            .compactMap { AVSpeechSynthesisVoice(identifier: $0) }
+            .first ?? AVSpeechSynthesisVoice(language: "en-US")
+
+        utterance.rate = 0.50          // Deliberate, not rushed
+        utterance.pitchMultiplier = 0.80   // Low pitch — robotic authority
         utterance.volume = 1.0
+        utterance.preUtteranceDelay = 0.1  // Slight pause before speaking
+
         synthesizer.speak(utterance)
     }
 

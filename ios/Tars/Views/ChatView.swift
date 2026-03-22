@@ -24,6 +24,12 @@ struct ChatView: View {
                         }
                         .padding(.horizontal, 12)
                         .padding(.top, 8)
+
+                            // Thinking indicator
+                            if viewModel.isThinking {
+                                ThinkingBubble()
+                                    .id("thinking")
+                            }
                     }
                     .onChange(of: viewModel.messages.count) { _ in
                         if let last = viewModel.messages.last {
@@ -145,5 +151,34 @@ struct MessageBubble: View {
 
             if message.sender == .tars { Spacer(minLength: 60) }
         }
+    }
+}
+
+// MARK: - Thinking Indicator
+
+struct ThinkingBubble: View {
+    @State private var dotCount = 0
+    private let timer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
+    private let tarsAccent = Color(red: 0, green: 0.9, blue: 0.9)
+
+    var body: some View {
+        HStack {
+            HStack(spacing: 6) {
+                ForEach(0..<3, id: \.self) { i in
+                    Circle()
+                        .fill(tarsAccent)
+                        .frame(width: 8, height: 8)
+                        .opacity(dotCount % 3 == i ? 1.0 : 0.3)
+                        .animation(.easeInOut(duration: 0.3), value: dotCount)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .background(Color(UIColor.secondarySystemBackground))
+            .cornerRadius(16)
+
+            Spacer(minLength: 60)
+        }
+        .onReceive(timer) { _ in dotCount += 1 }
     }
 }
